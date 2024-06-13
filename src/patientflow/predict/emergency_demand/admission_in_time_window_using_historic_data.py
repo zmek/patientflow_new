@@ -1,10 +1,11 @@
 import json
+from io import BytesIO
+
 import numpy as np
 import pandas as pd
 import requests
-from io import BytesIO
-import pandas as pd
 from openpyxl import load_workbook
+from typing import List, Dict
 
 
 # Parsing the 'Duration in department' column to extract start and end times
@@ -30,7 +31,7 @@ def parse_duration(duration):
         return parts, None
 
 
-def load_data_into_dataframe(url, sheet_name, columns):
+def load_data_into_dataframe(url: str, sheet_name: str, columns: List[str]) -> pd.DataFrame:
     """
     Load data into a DataFrame from a specified URL and sheet name.
 
@@ -41,8 +42,8 @@ def load_data_into_dataframe(url, sheet_name, columns):
 
     Returns:
         pandas.DataFrame: Loaded data as a DataFrame.
-    """
 
+    """
     # Specify the 'Duration in department' target string to find the duration column
     target_string = "Duration in department"
 
@@ -52,7 +53,6 @@ def load_data_into_dataframe(url, sheet_name, columns):
         file_in_memory = BytesIO(response.content)
 
         if url.endswith(".xlsx"):
-
             workbook = load_workbook(file_in_memory, data_only=True)
             try:
                 sheet = workbook[sheet_name]
@@ -161,7 +161,7 @@ def load_data_into_dataframe(url, sheet_name, columns):
         return None
 
 
-def load_json_configuration(json_file_path, reference_year):
+def load_json_configuration(json_file_path: str, reference_year: str) -> Dict:
     """
     Load NHSE source data configuration from a JSON file.
 
@@ -171,16 +171,17 @@ def load_json_configuration(json_file_path, reference_year):
 
     Returns:
         dict: A dictionary containing the URL, sheet name, and columns.
+
     """
     try:
-        with open(json_file_path, "r") as file:
+        with open(json_file_path) as file:
             nhse_urls_dict = json.load(file)
         return nhse_urls_dict[reference_year]
     except (FileNotFoundError, KeyError) as e:
         raise ValueError("Error loading configuration: " + str(e))
 
 
-def calculate_cumulative_proportions(df, columns):
+def calculate_cumulative_proportions(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """
     Calculate cumulative totals and proportions of patients.
 
@@ -190,6 +191,7 @@ def calculate_cumulative_proportions(df, columns):
 
     Returns:
         pandas.DataFrame: DataFrame with added cumulative totals and proportions.
+
     """
     columns_to_sum = set(columns).intersection(df.columns)
     total_patients = df[list(columns_to_sum)].sum().sum()
@@ -198,7 +200,7 @@ def calculate_cumulative_proportions(df, columns):
     return df
 
 
-def interpolate_probabilities(df, time_window, time_interval):
+def interpolate_probabilities(df: pd.DataFrame, prediction_window: int, time_interval: int) -> np.ndarray:
     """
     Interpolate probabilities at specified time intervals.
 
@@ -206,23 +208,24 @@ def interpolate_probabilities(df, time_window, time_interval):
 
     Args:
         df (pandas.DataFrame): The DataFrame with time and cumulative proportion data.
-        time_window (int): Total time window in hours.
+        prediction_window (int): Total prediction window in hours.
         time_interval (int): Time interval in minutes.
 
     Returns:
         numpy.ndarray: Interpolated probabilities.
+
     """
     df_new = pd.concat(
         [
             df[["end_time", "cum_prop"]].iloc[:24],
-            pd.DataFrame({"end_time": [time_window], "cum_prop": [1]}),
+            pd.DataFrame({"end_time": [prediction_window], "cum_prop": [1]}),
         ]
     )
-    xnew = np.arange(1, time_window / time_interval + 1) * time_interval
+    xnew = np.arange(1, prediction_window / time_interval + 1) * time_interval
     return np.interp(xnew, df_new["end_time"], df_new["cum_prop"])
 
 
-def compute_rolling_mean(interpolated_probs):
+def compute_rolling_mean(interpolated_probs: np.ndarray) -> np.ndarray:
     """
     Compute the rolling mean of interpolated probabilities.
 
@@ -231,24 +234,28 @@ def compute_rolling_mean(interpolated_probs):
 
     Returns:
         numpy.ndarray: Smoothed probabilities.
+
     """
     rolling_mean = np.convolve(interpolated_probs, np.ones(2) / 2, mode="valid")
     rolling_mean = np.insert(rolling_mean, 0, interpolated_probs[0])
     return np.flip(rolling_mean)
 
 
-def calculate_probability(json_file_path, reference_year, time_window, time_interval):
+def calculate_probability(
+    json_file_path: str, reference_year: str, prediction_window: int, time_interval: int
+) -> np.ndarray:
     """
-    Calculate the probability of hospital admission within a specified time window.
+    Calculate the probability of hospital admission within a specified prediction window.
 
     Args:
         json_file_path (str): Path to the JSON file.
         reference_year (str): Year for which the data is to be analyzed.
-        time_window (int): Total time window (in minutes).
+        prediction_window (int): Total prediction window (in minutes).
         time_interval (int): Time interval (in minutes).
 
     Returns:
         numpy.ndarray: Array of probabilities.
+
     """
     # Validate and Load Configuration
     nhse_source_data = load_json_configuration(json_file_path, reference_year)
@@ -264,7 +271,7 @@ def calculate_probability(json_file_path, reference_year, time_window, time_inte
     df = calculate_cumulative_proportions(df, nhse_source_data["columns"])
 
     # Validate and Interpolate Probabilities
-    interpolated_probs = interpolate_probabilities(df, time_window, time_interval)
+    interpolated_probs = interpolate_probabilities(df, prediction_window, time_interval)
 
     # Validate and Compute Rolling Mean
     return compute_rolling_mean(interpolated_probs)
